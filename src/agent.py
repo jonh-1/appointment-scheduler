@@ -42,6 +42,27 @@ class Assistant(Agent):
         )
     
     @function_tool
+    async def get_doctors(self, context: RunContext) -> list[dict]:
+        """
+        Use this tool to get the list of doctors available for appointments.
+        """
+        return [
+            "Dr. Smith",
+            "Dr. Williams",
+            "Dr. Brown",
+        ]
+
+    @function_tool
+    async def get_working_hours(self, context: RunContext) -> list[dict]:
+        """
+        Use this tool to get the office hours of the medical practice.
+        """
+        return [
+            "Monday - Friday: 9:00 AM - 5:00 PM",
+            "Saturday - Sunday: 10:00 AM - 4:00 PM",
+        ]
+
+    @function_tool
     async def get_current_date_and_time(self, context: RunContext) -> list[dict]:
         """
         Use this tool to get the current date and time, in particular when a caller
@@ -54,28 +75,34 @@ class Assistant(Agent):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     @function_tool
-    async def add_appointment(self, context: RunContext, patient_name: str, scheduled_at: str, summary: str) -> None:
+    async def add_appointment(self, context: RunContext, patient_name: str, doctor_name: str, scheduled_at: str, summary: str) -> None:
         """
         Use this tool to schedule a new appointment for a patient.
 
         Make sure to use the get_current_date_and_time tool if the caller requests an appointment relative 
         to the current date and time.
 
-        Please also make sure the caller provides their name and the reason for the appointment.
+        Please also make sure the caller provides their name, preferred doctor, and the reason for the appointment.
+
+        If the user doesn't have a preferred doctor, you can use the get_doctors tool to get the list of doctors available for appointments.
+        
+        Make sure to use the get_office_hours tool to ensure that the appointment is scheduled while the office is open. Only read back the hours
+        to the caller if they ask about office hours or if they try to schedule an appointment outside of the office hours.
 
         When the appointment is scheduled, please read back the appointment details, including the full date and time.
         When reading the time back to the user, please provide it in AM/PM format, not 24-hour format.
 
         Args:
             patient_name: The name of the patient
-            scheduled_at: The date and time of the appointment
+            doctor_name: The name of the doctor
+            scheduled_at: The date and time of the appointment in YYYY-MM-DD HH:MM:SS format
             summary: A brief summary of the appointment
 
         Returns:
             Appointment details if scheduled successfully, error message otherwise
         """
         
-        appointment, error = insert_appointment(patient_name, scheduled_at, summary)
+        appointment, error = insert_appointment(patient_name, doctor_name, scheduled_at, summary)
         if error:
             logger.error(f"Error inserting appointment: {error}")
             return f"Error inserting appointment: {error}"
