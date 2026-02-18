@@ -57,8 +57,8 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="my-agent")
-async def my_agent(ctx: JobContext):
+@server.rtc_session(agent_name="appointment-scheduler-agent")
+async def appointment_scheduler_agent(ctx: JobContext):
     # Logging setup
     # Add any other context you want in all log entries here
     ctx.log_context_fields = {
