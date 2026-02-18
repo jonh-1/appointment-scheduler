@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -8,12 +9,16 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
+    RunContext,
     cli,
+    function_tool,
     inference,
     room_io,
 )
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+from db import init_db, insert_appointment, select_appointments, select_appointments_by_patient
 
 logger = logging.getLogger("agent")
 
@@ -23,34 +28,79 @@ load_dotenv(".env.local")
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="""You are a helpful voice AI assistant. The user is interacting with you via voice, even if you perceive the conversation as text.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
+            instructions=f"""You are a helpful voice AI assistant that schedules appointments for a medical practice called Robot Medical Group.
+            The user is interacting with you via voice, even if you perceive the conversation as text.
+            You eagerly assist users with their questions by scheduling appointments or providing information from your extensive knowledge.
             Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
             You are curious, friendly, and have a sense of humor.""",
         )
+    
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="Greet the user, thank them for calling, and ask how you can help.",
+            allow_interruptions=True,
+        )
+    
+    @function_tool
+    async def get_current_date_and_time(self, context: RunContext) -> list[dict]:
+        """
+        Use this tool to get the current date and time, in particular when a caller
+        requests an appointment relative to the current date and time, 
+        e.g. "tomorrow", "next week", "in an hour", etc.
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+        Returns:
+            Date and time string in the format "YYYY-MM-DD HH:MM:SS"
+        """
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    @function_tool
+    async def add_appointment(self, context: RunContext, patient_name: str, scheduled_at: str, summary: str) -> None:
+        """
+        Use this tool to schedule a new appointment for a patient.
+
+        Make sure to use the get_current_date_and_time tool if the caller requests an appointment relative 
+        to the current date and time.
+
+        Please also make sure the caller provides their name and the reason for the appointment.
+
+        When the appointment is scheduled, please read back the appointment details, including the full date and time.
+        When reading the time back to the user, please provide it in AM/PM format, not 24-hour format.
+
+        Args:
+            patient_name: The name of the patient
+            scheduled_at: The date and time of the appointment
+            summary: A brief summary of the appointment
+
+        Returns:
+            Appointment details if scheduled successfully, error message otherwise
+        """
+        
+        appointment, error = insert_appointment(patient_name, scheduled_at, summary)
+        if error:
+            logger.error(f"Error inserting appointment: {error}")
+            return f"Error inserting appointment: {error}"
+        return f"Appointment added successfully. Created: {appointment}"
+
+    @function_tool
+    async def get_appointments_for_patient(self, context: RunContext, patient_name: str) -> list[dict]:
+        """
+        Use this tool to get all appointments for a patient.
+
+        Args:
+            patient_name: The name of the patient
+
+        Returns:
+            A list of appointments for the patient
+        """
+
+        return select_appointments_by_patient(patient_name)
 
 
 server = AgentServer()
 
 
 def prewarm(proc: JobProcess):
+    init_db()
     proc.userdata["vad"] = silero.VAD.load()
 
 
