@@ -2,9 +2,9 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-database_path = Path(__file__).resolve().parent.parent / "data" / "scheduler.db"
+DATABASE_PATH = Path(__file__).resolve().parent.parent / "data" / "scheduler.db"
 
-appointments_schema = """
+APPOINTMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS appointments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -16,24 +16,21 @@ CREATE TABLE IF NOT EXISTS appointments (
 );
 """
 
-def get_db_path() -> Path:
-    return database_path
-
 
 def init_db() -> None:
-    database_path.parent.mkdir(parents=True, exist_ok=True)
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     try:
-        conn.executescript(appointments_schema)
+        conn.executescript(APPOINTMENTS_SCHEMA)
         conn.commit()
     finally:
         conn.close()
 
 
-def check_for_conflicting_appointments(scheduled_at: str, doctor_name: str) -> bool:
+def _check_for_conflicting_appointments(scheduled_at: str, doctor_name: str) -> bool:
     """Return True if the doctor already has an appointment at the given time."""
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     try:
         (count,) = conn.execute(
             "SELECT COUNT(*) FROM appointments WHERE scheduled_at = ? AND doctor_name = ?",
@@ -51,9 +48,9 @@ def insert_appointment(
     summary: str,
     appointment_notes: str = "",
 ) -> tuple[Optional[dict], Optional[sqlite3.Error | ValueError]]:
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     try:
-        conflict = check_for_conflicting_appointments(scheduled_at, doctor_name)
+        conflict = _check_for_conflicting_appointments(scheduled_at, doctor_name)
         if conflict:
             return (None, ValueError("Conflicting appointment found, ask the user to schedule a different time."))
 
@@ -71,7 +68,7 @@ def insert_appointment(
 
 
 def select_appointments() -> list[dict]:
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     try:
         return conn.execute("SELECT * FROM appointments").fetchall()
     finally:
@@ -79,7 +76,7 @@ def select_appointments() -> list[dict]:
 
 
 def select_appointments_by_patient(patient_name: str, future_only: bool = False) -> list[dict]:
-    conn = sqlite3.connect(database_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     try:
         return conn.execute(f"SELECT * FROM appointments WHERE patient_name = ? {"AND scheduled_at > datetime('now')" if future_only else ''}", (patient_name,)).fetchall()
     finally:
