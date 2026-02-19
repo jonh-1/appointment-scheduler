@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from os import getenv
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -12,13 +13,16 @@ from livekit.agents import (
     RunContext,
     cli,
     function_tool,
+    get_job_context,
     inference,
     room_io,
 )
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.beta.workflows import WarmTransferTask
+from livekit.protocol import sip
 
-from db import init_db, insert_appointment, select_appointments, select_appointments_by_patient
+from db import init_db, insert_appointment, select_appointments_by_patient
 
 logger = logging.getLogger("agent")
 
@@ -113,7 +117,7 @@ class Assistant(Agent):
         - Make sure the scheduled date and time is a future date and time within office hours, but don't announce that you're verifying this.
         - Make sure the requested time is within half-hour increments. If the caller requests a time that is not within half-hour increments,
         ask them if they would like to schedule for the next half-hour increment.
-        - If the reason for the appointment is urgent, refer the caller to the emergency room.
+        - If the reason for the appointment is urgent, use the handle_urgent_medical_emergency tool to warm transfer the call to the emergency room.
         - Don't be overly wordy and don't announce tools as you're using them. Just confirm the information provided and schedule the appointment.
         - If the caller provides a day such as "next Wednesday", use the get_current_date_and_time tool to determine the current day of the week
         to determine the date the user is referring to. Don't announce that you're computing this, just use the result.
@@ -155,6 +159,36 @@ class Assistant(Agent):
         """
 
         return select_appointments_by_patient(patient_name)
+
+    @function_tool
+    async def handle_urgent_medical_emergency(self, context: RunContext, patient_name: str, reason: str) -> None:
+        """
+        Use this tool to handle an urgent medical emergency. You'll collect the patient's name and reason
+        for the emergency and then cold transfer the call to the emergency room.
+
+        Args:
+            patient_name: The name of the patient
+            reason: The reason for the urgent medical emergency
+        """
+
+        job_ctx = get_job_context()
+        room = job_ctx.room
+        transfer_to = f"tel:+{getenv("EMERGENCY_ROOM_NUMBER")}"
+
+        sip_participant = None
+        for p in room.remote_participants.values():
+            if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                sip_participant = p
+                break
+
+        try:
+            await job_ctx.transfer_sip_participant(participant=sip_participant, transfer_to=transfer_to, play_dialtone=False)
+            logger.info(f"Transferred SIP participant to emergency room")
+        except Exception as e:
+            logger.error(f"Error transferring SIP participant: {e}")
+            return f"Error transferring SIP participant: {e}"
+
+        return "Redirected to the emergency room."
 
 
 server = AgentServer()
