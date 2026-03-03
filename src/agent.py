@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime
 from os import getenv
+import time
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -19,8 +21,8 @@ from livekit.agents import (
 )
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livekit.agents.beta.workflows import WarmTransferTask
-from livekit.protocol import sip
+from livekit import api
+
 
 from db import init_db, insert_appointment, select_appointments_by_patient
 
@@ -28,6 +30,7 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
+EMERGENCY_ROOM_NUMBER = getenv("EMERGENCY_ROOM_NUMBER")
 
 class Assistant(Agent):
     def __init__(self) -> None:
@@ -117,7 +120,7 @@ class Assistant(Agent):
         - Make sure the scheduled date and time is a future date and time within office hours, but don't announce that you're verifying this.
         - Make sure the requested time is within half-hour increments. If the caller requests a time that is not within half-hour increments,
         ask them if they would like to schedule for the next half-hour increment.
-        - If the reason for the appointment is urgent, use the handle_urgent_medical_emergency tool to warm transfer the call to the emergency room.
+        - If the user requests to speak to the on-call doctor, use the handle_speak_to_on_call_doctor tool to add the doctor as a SIP participant.
         - Don't be overly wordy and don't announce tools as you're using them. Just confirm the information provided and schedule the appointment.
         - If the caller provides a day such as "next Wednesday", use the get_current_date_and_time tool to determine the current day of the week
         to determine the date the user is referring to. Don't announce that you're computing this, just use the result.
@@ -161,19 +164,42 @@ class Assistant(Agent):
         return select_appointments_by_patient(patient_name)
 
     @function_tool
-    async def handle_urgent_medical_emergency(self, context: RunContext, patient_name: str, reason: str) -> None:
+    async def handle_speak_to_on_call_doctor(self, context: RunContext) -> None:
         """
-        Use this tool to handle an urgent medical emergency. You'll collect the patient's name and reason
-        for the emergency and then cold transfer the call to the emergency room.
-
-        Args:
-            patient_name: The name of the patient
-            reason: The reason for the urgent medical emergency
+        Use this tool to handle a request to speak to the on-call doctor. 
+        You'll add the doctor as a SIP participant so the caller can speak with them directly.
         """
 
+        await self.add_on_call_doctor_softphone_as_sip_participant()
+
+
+    async def add_on_call_doctor_softphone_as_sip_participant(self) -> None:
+        try:
+            job_ctx = get_job_context()
+            room = job_ctx.room
+            
+            logger.info(f"Adding doctor as SIP participant to room {room.name}")
+            
+            participant = await job_ctx.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
+                sip_trunk_id="ST_GKyTqhYWVNY4",
+                participant_identity=f"emergency-room-{uuid4()}",
+                participant_name="Emergency Room",
+                room_name=room.name,
+                sip_call_to="userjonhermantest240668",
+                wait_until_answered=True,
+                sip_number="+18126841423",
+                include_headers=api.SIPHeaderOptions.SIP_ALL_HEADERS,
+            ))
+
+            logger.info(f"Doctor SIP participant added to room {room.name}")
+            logger.info(f"Doctor SIP participant: {participant}")
+        except api.TwirpError as e:
+            logger.error(f"Error adding doctor as SIP participant: {e.status}")
+
+    async def cold_transfer_to_emergency_room(self) -> None:
         job_ctx = get_job_context()
         room = job_ctx.room
-        transfer_to = f"tel:+{getenv("EMERGENCY_ROOM_NUMBER")}"
+        transfer_to = f"tel:+{EMERGENCY_ROOM_NUMBER}"
 
         sip_participant = None
         for p in room.remote_participants.values():
@@ -181,14 +207,8 @@ class Assistant(Agent):
                 sip_participant = p
                 break
 
-        try:
-            await job_ctx.transfer_sip_participant(participant=sip_participant, transfer_to=transfer_to, play_dialtone=False)
-            logger.info(f"Transferred SIP participant to emergency room")
-        except Exception as e:
-            logger.error(f"Error transferring SIP participant: {e}")
-            return f"Error transferring SIP participant: {e}"
-
-        return "Redirected to the emergency room."
+        await job_ctx.transfer_sip_participant(participant=sip_participant, transfer_to=transfer_to, play_dialtone=False)
+        logger.info(f"Transferred SIP participant to emergency room")
 
 
 server = AgentServer()
@@ -265,6 +285,8 @@ async def appointment_scheduler_agent(ctx: JobContext):
             ),
         ),
     )
+
+    
 
     # Join the room and connect to the user
     await ctx.connect()
