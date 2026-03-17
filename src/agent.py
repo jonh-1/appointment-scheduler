@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime
 from os import getenv
-import time
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -22,7 +21,6 @@ from livekit.agents import (
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit import api
-
 
 from db import init_db, insert_appointment, select_appointments_by_patient
 
@@ -181,20 +179,23 @@ class Assistant(Agent):
             logger.info(f"Adding doctor as SIP participant to room {room.name}")
             
             participant = await job_ctx.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
-                sip_trunk_id="ST_GKyTqhYWVNY4",
-                participant_identity=f"emergency-room-{uuid4()}",
-                participant_name="Emergency Room",
+                participant_identity=f"test-{uuid4()}",
+                participant_name="Test",
                 room_name=room.name,
-                sip_call_to="userjonhermantest240668",
+                sip_call_to="usernicjohn92813",
                 wait_until_answered=True,
                 sip_number="+18126841423",
                 include_headers=api.SIPHeaderOptions.SIP_ALL_HEADERS,
+                trunk=api.SIPOutboundConfig(
+                    hostname="sip.telnyx.com",
+                    transport=api.SIPTransport.SIP_TRANSPORT_UDP,
+                )
             ))
 
             logger.info(f"Doctor SIP participant added to room {room.name}")
             logger.info(f"Doctor SIP participant: {participant}")
         except api.TwirpError as e:
-            logger.error(f"Error adding doctor as SIP participant: {e.status}")
+            logger.error(f"Error adding doctor as SIP participant: {e}")
 
     async def cold_transfer_to_emergency_room(self) -> None:
         job_ctx = get_job_context()
@@ -222,7 +223,7 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="appointment-scheduler-agent")
+@server.rtc_session(agent_name="appointment-scheduler-agent-dev")
 async def appointment_scheduler_agent(ctx: JobContext):
     # Logging setup
     # Add any other context you want in all log entries here
@@ -283,10 +284,8 @@ async def appointment_scheduler_agent(ctx: JobContext):
                     else noise_cancellation.BVC()
                 ),
             ),
-        ),
+        )
     )
-
-    
 
     # Join the room and connect to the user
     await ctx.connect()
