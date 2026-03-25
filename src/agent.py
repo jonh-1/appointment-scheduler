@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from livekit import rtc
+from google.genai import types
+from livekit.plugins import google
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -21,6 +23,7 @@ from livekit.agents import (
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit import api
+from google.genai import types
 
 from db import init_db, insert_appointment, select_appointments_by_patient
 
@@ -148,6 +151,17 @@ class Assistant(Agent):
         return f"Appointment added successfully. Created: {appointment}"
 
     @function_tool
+    async def get_history_of_the_office(self, context: RunContext) -> str:
+        """
+        Use this tool when asked about the history of the office.
+
+        Returns:
+            A story aboutt the history of the office
+        """
+
+        return "Tell a long-winded made-up story about when the office was founded and the first doctor to practice there."
+
+    @function_tool
     async def get_appointments_for_patient(self, context: RunContext, patient_name: str) -> list[dict]:
         """
         Use this tool to get all appointments for a patient.
@@ -235,22 +249,36 @@ async def appointment_scheduler_agent(ctx: JobContext):
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=inference.STT(model="deepgram/nova-3", language="multi"),
+        # stt=inference.STT(model="deepgram/nova-3", language="multi"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=inference.LLM(model="openai/gpt-4.1-mini"),
+        # llm=inference.LLM(model="openai/gpt-4.1-mini"),
+        llm=google.realtime.RealtimeModel(
+            #model="gemini-2.5-flash-native-audio-preview-12-2025", 
+            #voice="Sulafat",
+            #temperature=0.8,
+            # tool_response_scheduling=types.FunctionResponseScheduling.INTERRUPT,
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                    silence_duration_ms=500,
+                    prefix_padding_ms=100,
+                )
+            ),
+        ),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=inference.TTS(
-            model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
-        ),
+        # tts=inference.TTS(
+        #    model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
+        # ),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
+        # turn_detection=MultilingualModel(),
+        # vad=ctx.proc.userdata["vad"],
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
+        #preemptive_generation=True,
     )
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
