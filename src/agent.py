@@ -9,14 +9,17 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    InterruptionOptions,
     JobContext,
     JobProcess,
     RunContext,
+    TurnHandlingOptions,
     cli,
     function_tool,
     get_job_context,
     inference,
     room_io,
+    stt,
 )
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -236,6 +239,9 @@ async def appointment_scheduler_agent(ctx: JobContext):
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=inference.STT(model="deepgram/nova-3", language="multi"),
+        # stt=stt.FallbackAdapter([
+        #     inference.STT(model="deepgram/nova-3", language="multi"),
+        # ]),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
@@ -246,11 +252,16 @@ async def appointment_scheduler_agent(ctx: JobContext):
         ),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
+        turn_handling=TurnHandlingOptions(
+            turn_detection=MultilingualModel(),
+            interruption=InterruptionOptions(
+                mode="adaptive"
+            )
+        )
     )
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
