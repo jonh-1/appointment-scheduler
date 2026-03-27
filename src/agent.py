@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from os import getenv
+from urllib.parse import uses_params
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -19,9 +20,8 @@ from livekit.agents import (
     get_job_context,
     inference,
     room_io,
-    stt,
 )
-from livekit.plugins import noise_cancellation, silero
+from livekit.plugins import noise_cancellation, silero, elevenlabs
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit import api
 
@@ -37,6 +37,7 @@ class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=f"""You are a helpful voice AI assistant that schedules appointments for a medical practice called Robot Medical Group.
+            You can also answer questions about anything else the user asks.
             The user is interacting with you via voice, even if you perceive the conversation as text.
             You eagerly assist users with their questions by scheduling appointments or providing information from your extensive knowledge.
             Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
@@ -247,15 +248,26 @@ async def appointment_scheduler_agent(ctx: JobContext):
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=inference.TTS(
-            model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
+        tts=elevenlabs.TTS(
+            model="eleven_turbo_v2",
+            voice_id="S1AbptTjQ2EmenrwyKI5",
+            encoding='pcm_24000',
+            auto_mode=False,
+            enable_ssml_parsing=True,
+            voice_settings=elevenlabs.VoiceSettings(
+                stability=0.7,
+                similarity_boost=0.35,
+                style=0.0,
+                speed=0.96,
+                use_speaker_boost=True,
+            ),
         ),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
         vad=ctx.proc.userdata["vad"],
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
+        # preemptive_generation=True,
         turn_handling=TurnHandlingOptions(
             turn_detection=MultilingualModel(),
             interruption=InterruptionOptions(
