@@ -4,28 +4,35 @@ from os import getenv
 from uuid import uuid4
 
 from dotenv import load_dotenv
+from google.protobuf.duration_pb2 import Duration
 from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    ConversationItemAddedEvent,
     InterruptionOptions,
     JobContext,
     JobProcess,
+    PreemptiveGenerationOptions,
     RunContext,
     TurnHandlingOptions,
+    EndpointingOptions,
     cli,
     function_tool,
     get_job_context,
     inference,
+    llm,
     room_io,
     stt,
 )
+from livekit.agents.llm import FallbackAdapter
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit import api
 
 from db import init_db, insert_appointment, select_appointments_by_patient
+from openai.types.shared_params import reasoning
 
 logger = logging.getLogger("agent")
 
@@ -165,45 +172,40 @@ class Assistant(Agent):
         return select_appointments_by_patient(patient_name)
 
     @function_tool
-    async def handle_speak_to_on_call_doctor(self, context: RunContext) -> None:
+    async def handle_transfer_request(self, context: RunContext) -> None:
         """
-        Use this tool to handle a request to speak to the on-call doctor. 
-        You'll add the doctor as a SIP participant so the caller can speak with them directly.
+        Use this tool to handle a request to transfer the call. .
         """
 
-        await self.add_on_call_doctor_softphone_as_sip_participant()
+        await self.cold_transfer()
 
-
-    async def add_on_call_doctor_softphone_as_sip_participant(self) -> None:
+    async def add_sip_participant(self) -> None:
         try:
             job_ctx = get_job_context()
             room = job_ctx.room
             
-            logger.info(f"Adding doctor as SIP participant to room {room.name}")
+            logger.info(f"Adding SIP participant to room {room.name}")
             
             participant = await job_ctx.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
                 participant_identity=f"test-{uuid4()}",
                 participant_name="Test",
                 room_name=room.name,
-                sip_call_to="usernicjohn92813",
+                sip_call_to="+13175448079",
                 wait_until_answered=True,
                 sip_number="+18126841423",
                 include_headers=api.SIPHeaderOptions.SIP_ALL_HEADERS,
-                trunk=api.SIPOutboundConfig(
-                    hostname="sip.telnyx.com",
-                    transport=api.SIPTransport.SIP_TRANSPORT_UDP,
-                )
+                sip_trunk_id="ST_ZEAboiVYGHou",
             ))
 
-            logger.info(f"Doctor SIP participant added to room {room.name}")
-            logger.info(f"Doctor SIP participant: {participant}")
+            logger.info(f"SIP participant added to room {room.name}")
+            logger.info(f"SIP participant: {participant}")
         except api.TwirpError as e:
-            logger.error(f"Error adding doctor as SIP participant: {e}")
+            logger.error(f"Error adding SIP participant: {e}")
 
-    async def cold_transfer_to_emergency_room(self) -> None:
+    async def cold_transfer(self) -> None:
         job_ctx = get_job_context()
         room = job_ctx.room
-        transfer_to = f"tel:+{EMERGENCY_ROOM_NUMBER}"
+        transfer_to = f"tel:+17742163291"
 
         sip_participant = None
         for p in room.remote_participants.values():
@@ -211,8 +213,12 @@ class Assistant(Agent):
                 sip_participant = p
                 break
 
+        req = api.TransferSIPParticipantRequest(
+            ringing_timeout=Duration(seconds=60),
+        )
+
         await job_ctx.transfer_sip_participant(participant=sip_participant, transfer_to=transfer_to, play_dialtone=False)
-        logger.info(f"Transferred SIP participant to emergency room")
+        logger.info(f"Transferred SIP participant")
 
 
 server = AgentServer()
@@ -226,63 +232,60 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="appointment-scheduler-agent-dev")
+@server.rtc_session(agent_name="appointment-scheduler-agent-local")
 async def appointment_scheduler_agent(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
 
-    # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=inference.STT(model="deepgram/nova-3", language="multi"),
-        # stt=stt.FallbackAdapter([
-        #     inference.STT(model="deepgram/nova-3", language="multi"),
-        # ]),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=inference.LLM(model="openai/gpt-4.1-mini"),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
+        llm=llm.FallbackAdapter([
+            inference.LLM(model="openai/gpt-5.4"),
+            inference.LLM(model="openai/gpt-4.1-mini"),
+        ], attempt_timeout=4),
         tts=inference.TTS(
-            model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
+            model="cartesia/sonic-3", voice="5ee9feff-1265-424a-9d7f-8e4d431a12c7"
         ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
         turn_handling=TurnHandlingOptions(
-            turn_detection=MultilingualModel(),
+            endpointing=EndpointingOptions(
+                mode="fixed",
+                min_delay=0.5,
+                max_delay=3,
+                alpha=0.9,
+            ),
             interruption=InterruptionOptions(
-                mode="adaptive"
+                mode="adaptive",
+                discard_audio_if_uninterruptible=True,
+                min_duration=0.5,
+                min_words=0, 
+                resume_false_interruption=True,
+                false_interruption_timeout=4,
+                backchannel_boundary=[1, 3.5],
+            ),
+            preemptive_generation=PreemptiveGenerationOptions(
+                enabled=True,
+                preemptive_tts=False,
+                max_speech_duration=10,
+                max_retries=3,
             )
         )
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
+        if not isinstance(ev.item, llm.ChatMessage):
+            return
+        m = ev.item.metrics
+        if ev.item.role == "assistant" and m.get("e2e_latency") is not None:
+            logger.info(
+                "E2E latency: %.3fs (metrics=%s)",
+                m["e2e_latency"],
+                m,
+            )
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
-
-    # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
         agent=Assistant(),
         room=ctx.room,
@@ -295,10 +298,15 @@ async def appointment_scheduler_agent(ctx: JobContext):
                     else noise_cancellation.BVC()
                 ),
             ),
-        )
+        ),
+        record={
+            "audio": False,
+            "traces": True,
+            "transcript": True,
+            "logs": True,
+        }
     )
 
-    # Join the room and connect to the user
     await ctx.connect()
 
 
