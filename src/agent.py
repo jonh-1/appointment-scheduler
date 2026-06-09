@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime
 from os import getenv
@@ -16,6 +17,7 @@ from livekit.agents import (
     JobProcess,
     PreemptiveGenerationOptions,
     RunContext,
+    StopResponse,
     TurnHandlingOptions,
     EndpointingOptions,
     cli,
@@ -174,10 +176,11 @@ class Assistant(Agent):
     @function_tool
     async def handle_transfer_request(self, context: RunContext) -> None:
         """
-        Use this tool to handle a request to transfer the call. .
+        Use this tool to handle a request to transfer the call.
         """
 
-        await self.cold_transfer()
+        asyncio.create_task(self.cold_transfer(context))
+        raise StopResponse()
 
     async def add_sip_participant(self) -> None:
         try:
@@ -190,7 +193,7 @@ class Assistant(Agent):
                 participant_identity=f"test-{uuid4()}",
                 participant_name="Test",
                 room_name=room.name,
-                sip_call_to="+13175448079",
+                sip_call_to="+17742163291",
                 wait_until_answered=True,
                 sip_number="+18126841423",
                 include_headers=api.SIPHeaderOptions.SIP_ALL_HEADERS,
@@ -202,7 +205,7 @@ class Assistant(Agent):
         except api.TwirpError as e:
             logger.error(f"Error adding SIP participant: {e}")
 
-    async def cold_transfer(self) -> None:
+    async def cold_transfer(self, context: RunContext) -> None:
         job_ctx = get_job_context()
         room = job_ctx.room
         transfer_to = f"tel:+17742163291"
@@ -213,12 +216,15 @@ class Assistant(Agent):
                 sip_participant = p
                 break
 
-        req = api.TransferSIPParticipantRequest(
-            ringing_timeout=Duration(seconds=60),
-        )
-
-        await job_ctx.transfer_sip_participant(participant=sip_participant, transfer_to=transfer_to, play_dialtone=False)
-        logger.info(f"Transferred SIP participant")
+        await context.session.say("Transferring you now, please hold.", allow_interruptions=False)
+        
+        try:
+            await job_ctx.transfer_sip_participant(participant=sip_participant, transfer_to=transfer_to, play_dialtone=True)
+            logger.info(f"Transferred SIP participant")
+        except Exception as e:
+            logger.error(f"Error transferring SIP participant: {e}")
+            await context.session.say("Sorry, I couldn't transfer you. Please try again later.", allow_interruptions=False)
+            return
 
 
 server = AgentServer()
@@ -232,7 +238,7 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="appointment-scheduler-agent-local")
+@server.rtc_session(agent_name="appointment-scheduler-agent-console")
 async def appointment_scheduler_agent(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
@@ -241,8 +247,8 @@ async def appointment_scheduler_agent(ctx: JobContext):
     session = AgentSession(
         stt=inference.STT(model="deepgram/nova-3", language="multi"),
         llm=llm.FallbackAdapter([
-            inference.LLM(model="openai/gpt-5.4"),
-            inference.LLM(model="openai/gpt-4.1-mini"),
+            inference.LLM(model="openai/gpt-5.4", inference_class='priority'),
+            inference.LLM(model="openai/gpt-4.1-mini", inference_class='priority'),
         ], attempt_timeout=4),
         tts=inference.TTS(
             model="cartesia/sonic-3", voice="5ee9feff-1265-424a-9d7f-8e4d431a12c7"
